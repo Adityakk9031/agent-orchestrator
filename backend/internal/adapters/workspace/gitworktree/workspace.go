@@ -302,6 +302,9 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 	if err != nil {
 		return ports.WorkspaceInfo{}, err
 	}
+	if cfg.Kind == domain.KindOrchestrator {
+		_, _ = w.run(ctx, w.binary, worktreeLockArgs(repo, path, "active AO orchestrator workspace")...)
+	}
 	return ports.WorkspaceInfo{Path: path, Branch: cfg.Branch, BaseRef: baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}, nil
 }
 
@@ -427,6 +430,9 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		if repo.name == domain.RootWorkspaceRepoName {
 			out.Root = ports.WorkspaceInfo{Path: repo.outputPath, Branch: branch, BaseRef: repo.baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}
 		}
+	}
+	if cfg.Kind == domain.KindOrchestrator {
+		_, _ = w.run(ctx, w.binary, worktreeLockArgs(rootRepo, rootPath, "active AO orchestrator workspace")...)
 	}
 	return out, nil
 }
@@ -670,6 +676,10 @@ func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (port
 	if err := w.requireReachableRepo(repo); err != nil {
 		return reclaim, err
 	}
+	// Unlock the worktree if it was locked (e.g. an orchestrator session)
+	// so legitimate teardown can unregister and remove it.
+	_, _ = w.run(ctx, w.binary, worktreeUnlockArgs(repo, path)...)
+
 	// Move the directory aside rather than waiting out `git worktree remove`'s
 	// walk of an ignored-file mountain; falls through to the git-driven path
 	// below whenever the move is not clearly safe.
@@ -742,6 +752,10 @@ func (w *Workspace) ForceDestroy(ctx context.Context, info ports.WorkspaceInfo) 
 	if err := w.requireReachableRepo(repo); err != nil {
 		return err
 	}
+	// Unlock the worktree if it was locked (e.g. an orchestrator session)
+	// so legitimate teardown can unregister and remove it.
+	_, _ = w.run(ctx, w.binary, worktreeUnlockArgs(repo, path)...)
+
 	// Force teardown has no refusal to honour, so the move is unconditional:
 	// rename the directory out of the way, drop the registration, unlink in the
 	// background. This runs on daemon shutdown and orchestrator replacement,
@@ -1537,6 +1551,10 @@ func (w *Workspace) forceDestroyPath(ctx context.Context, repo, path string) err
 	if err := w.requireReachableRepo(repo); err != nil {
 		return err
 	}
+	// Unlock the worktree if it was locked (e.g. an orchestrator session)
+	// so legitimate teardown can unregister and remove it.
+	_, _ = w.run(ctx, w.binary, worktreeUnlockArgs(repo, path)...)
+
 	// Force teardown has no refusal to honour, so the move is unconditional:
 	// rename the directory out of the way, drop the registration, unlink in the
 	// background.
