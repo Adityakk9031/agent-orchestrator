@@ -9905,7 +9905,6 @@ components:
         purpose:
           enum:
           - display
-          - settings
           - launch
           type: string
       required:
