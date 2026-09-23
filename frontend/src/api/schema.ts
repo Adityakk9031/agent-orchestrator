@@ -4040,7 +4040,10 @@ export interface components {
             token?: string;
         };
         PutGitHubPATRequest: {
+            expiresIn?: number;
             pat: string;
+            refreshToken?: string;
+            refreshTokenExpiresIn?: number;
         };
         RegisterPushDeviceRequest: {
             /** @description Human-friendly device label. */
