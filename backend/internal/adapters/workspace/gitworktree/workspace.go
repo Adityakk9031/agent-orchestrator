@@ -22,6 +22,7 @@ import (
 const (
 	defaultGitBinary              = "git"
 	defaultBranchResolutionBudget = 5 * time.Second
+	orchestratorLockReason        = "active AO orchestrator workspace"
 )
 
 // ErrUnsafePath is returned when a resolved worktree path escapes the managed
@@ -303,7 +304,7 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 		return ports.WorkspaceInfo{}, err
 	}
 	if cfg.Kind == domain.KindOrchestrator {
-		_, _ = w.run(ctx, w.binary, worktreeLockArgs(repo, path, "active AO orchestrator workspace")...)
+		_, _ = w.run(ctx, w.binary, worktreeLockArgs(repo, path, orchestratorLockReason)...)
 	}
 	return ports.WorkspaceInfo{Path: path, Branch: cfg.Branch, BaseRef: baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}, nil
 }
@@ -432,7 +433,7 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		}
 	}
 	if cfg.Kind == domain.KindOrchestrator {
-		_, _ = w.run(ctx, w.binary, worktreeLockArgs(rootRepo, rootPath, "active AO orchestrator workspace")...)
+		_, _ = w.run(ctx, w.binary, worktreeLockArgs(rootRepo, rootPath, orchestratorLockReason)...)
 	}
 	return out, nil
 }
@@ -676,9 +677,14 @@ func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (port
 	if err := w.requireReachableRepo(repo); err != nil {
 		return reclaim, err
 	}
-	// Unlock the worktree if it was locked (e.g. an orchestrator session)
-	// so legitimate teardown can unregister and remove it.
-	_, _ = w.run(ctx, w.binary, worktreeUnlockArgs(repo, path)...)
+	// Unlock the worktree if it was locked by AO (orchestrator session) so
+	// legitimate teardown can unregister and remove it. External/user locks
+	// are preserved so Destroy refuses removal.
+	if records, err := w.listRecords(ctx, repo); err == nil {
+		if rec, ok := findWorktree(records, path); ok && rec.Locked && rec.LockReason == orchestratorLockReason {
+			_, _ = w.run(ctx, w.binary, worktreeUnlockArgs(repo, path)...)
+		}
+	}
 
 	// Move the directory aside rather than waiting out `git worktree remove`'s
 	// walk of an ignored-file mountain; falls through to the git-driven path

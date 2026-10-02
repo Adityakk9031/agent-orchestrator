@@ -85,14 +85,24 @@ func TestParseWorktreePorcelain(t *testing.T) {
 		"worktree /bare",
 		"bare",
 		"",
+		"worktree /managed/proj/locked-no-reason",
+		"HEAD 111222",
+		"branch refs/heads/feature/lock1",
+		"locked",
+		"",
+		"worktree /managed/proj/locked-with-reason",
+		"HEAD 333444",
+		"branch refs/heads/feature/lock2",
+		"locked active AO orchestrator workspace",
+		"",
 	}, "\n")
 
 	recs, err := parseWorktreePorcelain(input)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(recs) != 4 {
-		t.Fatalf("len = %d, want 4: %#v", len(recs), recs)
+	if len(recs) != 6 {
+		t.Fatalf("len = %d, want 6: %#v", len(recs), recs)
 	}
 	if recs[1].Path != "/managed/proj/sess1" || recs[1].Branch != "feature/test" {
 		t.Fatalf("normal record = %#v", recs[1])
@@ -102,6 +112,12 @@ func TestParseWorktreePorcelain(t *testing.T) {
 	}
 	if !recs[3].Bare {
 		t.Fatalf("bare record = %#v", recs[3])
+	}
+	if !recs[4].Locked || recs[4].LockReason != "" {
+		t.Fatalf("locked without reason record = %#v", recs[4])
+	}
+	if !recs[5].Locked || recs[5].LockReason != "active AO orchestrator workspace" {
+		t.Fatalf("locked with reason record = %#v", recs[5])
 	}
 }
 
