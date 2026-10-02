@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1523,6 +1525,9 @@ func TestResumeChatSession_FallsBackToFreshThreadWhenNativeConversationMissing(t
 	launcher := &recordingLauncher{}
 	probe := &chatProbeAgent{exists: false}
 	mgr, store, _ := newChatManagerWithAgents(launcher, chatProbeAgents{agent: probe})
+	mgr.browserCapabilities = &scriptedBrowserCapabilities{issues: []browserCapabilityIssue{{
+		token: "rotated-token", verifier: "rotated-verifier",
+	}}}
 	seedChatResumeSession(store, domain.ActivityExited)
 	rec := store.sessions["mer-1"]
 	rec.Metadata.ProviderConversationID = "thread-unmaterialized"
@@ -1541,11 +1546,53 @@ func TestResumeChatSession_FallsBackToFreshThreadWhenNativeConversationMissing(t
 	if got := launcher.started[0].ProviderConversationID; got != "" {
 		t.Fatalf("provider conversation id passed to StartChat = %q, want empty", got)
 	}
+	if launcher.started[0].ExpectedControllerOwner.ProviderConversationID != "thread-unmaterialized" {
+		t.Fatalf("expected controller owner provider conversation id = %q, want thread-unmaterialized", launcher.started[0].ExpectedControllerOwner.ProviderConversationID)
+	}
 	if result.Mode != RestoreModeFresh {
 		t.Fatalf("result.Mode = %v, want %v", result.Mode, RestoreModeFresh)
 	}
 	if result.Session.Metadata.ProviderConversationID != "thread-1" {
 		t.Fatalf("restored session provider conversation id = %q, want thread-1", result.Session.Metadata.ProviderConversationID)
+	}
+	if result.Session.Metadata.BrowserCapabilityVerifier != "rotated-verifier" {
+		t.Fatalf("restored session browser capability verifier = %q, want rotated-verifier", result.Session.Metadata.BrowserCapabilityVerifier)
+	}
+}
+
+func TestResumeChatSession_SurvivingChatHostSkipsFreshFallback(t *testing.T) {
+	launcher := &recordingLauncher{live: false}
+	probe := &chatProbeAgent{exists: false}
+	mgr, store, _ := newChatManagerWithAgents(launcher, chatProbeAgents{agent: probe})
+	mgr.dataDir = t.TempDir()
+	hostDir := filepath.Join(mgr.dataDir, "chat-hosts", "mer-1")
+	if err := os.MkdirAll(hostDir, 0o700); err != nil {
+		t.Fatalf("mkdir hostDir: %v", err)
+	}
+	descriptor := fmt.Sprintf(`{"sessionId":"mer-1","address":"127.0.0.1:9999","token":"token","pid":%d}`, os.Getpid())
+	if err := os.WriteFile(filepath.Join(hostDir, "host.json"), []byte(descriptor), 0o600); err != nil {
+		t.Fatalf("write host.json: %v", err)
+	}
+	seedChatResumeSession(store, domain.ActivityExited)
+	rec := store.sessions["mer-1"]
+	rec.Metadata.ProviderConversationID = "thread-unmaterialized"
+	store.sessions["mer-1"] = rec
+
+	result, err := mgr.ResumeAgentWithMode(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatalf("ResumeAgentWithMode: %v", err)
+	}
+	if len(probe.probed) != 0 {
+		t.Fatalf("probe was called %d times (%v), want 0 when live host survives", len(probe.probed), probe.probed)
+	}
+	if len(launcher.started) != 1 {
+		t.Fatalf("started %d chat controllers, want 1", len(launcher.started))
+	}
+	if got := launcher.started[0].ProviderConversationID; got != "thread-unmaterialized" {
+		t.Fatalf("provider conversation id passed to StartChat = %q, want thread-unmaterialized", got)
+	}
+	if result.Mode != RestoreModeNative {
+		t.Fatalf("result.Mode = %v, want %v", result.Mode, RestoreModeNative)
 	}
 }
 

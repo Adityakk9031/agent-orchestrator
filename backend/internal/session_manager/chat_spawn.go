@@ -2,13 +2,16 @@ package sessionmanager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
 // The chat-mode controller launch.
@@ -356,14 +359,18 @@ func (m *Manager) resumeChatController(
 			ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID,
 		},
 	}
+	hasLiveHost := (m.chat != nil && m.chat.HasLiveChatController(rec.ID)) || hasLiveChatHost(m.dataDir, rec.ID)
 	conversationLost := ok && strings.TrimSpace(rec.Metadata.ProviderConversationID) != "" &&
+		!hasLiveHost &&
 		nativeConversationMissing(ctx, agent, ref, rec.Metadata.ProviderConversationID, env)
 	if conversationLost && requireNativeHistory {
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, ErrNativeConversationMissing)
 	}
+	expectedControllerOwner := rec.ControllerOwner()
+	effectiveProviderConversationID := rec.Metadata.ProviderConversationID
 	fresh := conversationLost || strings.TrimSpace(rec.Metadata.ProviderConversationID) == ""
 	if fresh {
-		rec.Metadata.ProviderConversationID = ""
+		effectiveProviderConversationID = ""
 	}
 	if requireNativeHistory {
 		historyMode = ports.ChatHistoryRequired
@@ -388,7 +395,7 @@ func (m *Manager) resumeChatController(
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            systemPrompt,
 		AdditionalDirectories:   additionalDirectories,
-		ExpectedControllerOwner: rec.ControllerOwner(),
+		ExpectedControllerOwner: expectedControllerOwner,
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
 				launchCtx, rec, project.Config.Env, expected,
@@ -403,7 +410,7 @@ func (m *Manager) resumeChatController(
 			return launchEnv, nil
 		},
 		// The handle that makes this a resume rather than a new conversation.
-		ProviderConversationID: rec.Metadata.ProviderConversationID,
+		ProviderConversationID: effectiveProviderConversationID,
 		ProviderHandoff:        providerHandoff,
 		// Ordinary resumes allocate a fresh generation. Switch recovery reuses
 		// the saga's reserved generation until delivery is durably settled so a
@@ -553,4 +560,32 @@ func (m *Manager) restoredWorkspaceProjectDirectories(
 		directories = append(directories, row.WorktreePath)
 	}
 	return directories, nil
+}
+
+func hasLiveChatHost(dataDir string, id domain.SessionID) bool {
+	sessionID := string(id)
+	if sessionID == "" || filepath.Base(sessionID) != sessionID || strings.ContainsAny(sessionID, `/\\`) {
+		return false
+	}
+	if !filepath.IsAbs(dataDir) {
+		return false
+	}
+	descriptorPath := filepath.Join(dataDir, "chat-hosts", sessionID, "host.json")
+	b, err := os.ReadFile(descriptorPath) //nolint:gosec // AO-owned path derived from validated session id.
+	if err != nil {
+		return false
+	}
+	var d struct {
+		SessionID string `json:"sessionId"`
+		Address   string `json:"address"`
+		Token     string `json:"token"`
+		PID       int    `json:"pid"`
+	}
+	if err := json.Unmarshal(b, &d); err != nil {
+		return false
+	}
+	if d.SessionID != sessionID || d.Address == "" || d.Token == "" || d.PID <= 0 {
+		return false
+	}
+	return processalive.Alive(d.PID)
 }
